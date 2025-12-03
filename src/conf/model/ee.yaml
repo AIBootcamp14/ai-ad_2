@@ -1,0 +1,6 @@
+# conf/model/ee.yaml
+
+ee:
+  contamination: 0.1
+  support_fraction: null   # 기본값 사용
+  # random_state는 config.py의 dataclass 기본값(42 등) 사용

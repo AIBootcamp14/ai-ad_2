@@ -1,0 +1,8 @@
+# conf/model/lof.yaml
+
+lof:
+  n_neighbors: 20
+  contamination: "auto"  # float 또는 "auto"
+  n_jobs: -1
+  novelty: true
+  metric: "minkowski"

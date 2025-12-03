@@ -1,0 +1,10 @@
+# conf/model/iforest.yaml
+
+# IsolationForestConfig에 매핑될 값들
+iforest:
+  n_estimators: 200
+  max_samples: "auto"
+  contamination: "auto"
+  max_features: 1.0
+  bootstrap: false
+  n_jobs: -1

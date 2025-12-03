@@ -1,0 +1,13 @@
+# conf/config.yaml
+
+defaults:
+  - model: iforest
+  - _self_
+
+# 공통 설정
+seed: 42
+output_path: "output_hydra.csv"
+
+# 어떤 모델을 쓸지 (iforest / sgd / lof / ee 등)
+model_type: IFOREST
+eda_only: false
