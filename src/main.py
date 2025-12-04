@@ -4,7 +4,7 @@ import time
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any, Literal
+from typing import Optional, Any
 from enum import Enum
 import csv
 
@@ -55,7 +55,7 @@ class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     eda_only: bool = False
 
-    wandb_project: Literal[str] = None
+    wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = None
     wandb_tags: list[str] = field(default_factory=list)
