@@ -411,8 +411,8 @@ sample_submission*.csv
 output*
 baseline.ipynb
 
-# elasticsearch
-/elasticsearch*
+# wandb
+/wandb
 
 # allow scripts inside the code directory
 !code/
