@@ -8,6 +8,8 @@ from typing import Optional, Any
 from enum import Enum
 import csv
 
+import wandb
+from omegaconf import OmegaConf
 import hydra
 from hydra.utils import to_absolute_path
 from hydra.core.config_store import ConfigStore
@@ -136,7 +138,17 @@ def hydra_app(cfg: AppConfig) -> None:
 
     internal_model_type = model_type_map[mt_name]
 
-    # 3. 모델 학습
+    # 3. Weights & Biases 초기화
+    cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+
+    run = wandb.init(
+        project="chemical-process-anomaly-detection",  # 원하는 프로젝트명
+        # entity="my_team_or_id",  # 팀/조직이 있으면 여기에 추가
+        config=cfg_dict, # type: ignore
+        tags=[mt_name.lower()],  # 예: "iforest", "sgd", ...
+    )
+
+    # 4. 모델 학습
     train_start = time.perf_counter()
     model = train_model(
         train_X=train_X,
@@ -148,8 +160,9 @@ def hydra_app(cfg: AppConfig) -> None:
     )
     train_elapsed = time.perf_counter() - train_start
     log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
+    wandb.log({"time/train_elapsed_sec": train_elapsed})
 
-    # 4. 추론
+    # 5. 추론
     infer_start = time.perf_counter()
     pred_df = inference(test_X=test_X, model=model)
     print("[Hydra] Prediction head:")
@@ -157,13 +170,32 @@ def hydra_app(cfg: AppConfig) -> None:
 
     infer_elapsed = time.perf_counter() - infer_start
     log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
+    wandb.log({"time/infer_elapsed_sec": infer_elapsed})
 
     total_elapsed = time.perf_counter() - total_start
     log.info(f"[TOTAL] Full run elapsed: {total_elapsed:.3f} seconds")
+    wandb.log({"time/total_elapsed_sec": total_elapsed})
 
-    # 5. 저장 (`,faultNumber` 형식)
+    # 6. 저장 (`,faultNumber` 형식)
     out_path = Path(to_absolute_path(cfg.output_path))
     save_predictions_as_submission(pred_df, out_path)
+
+    # 7. 제출 파일을 W&B Artifact로 업로드
+    if wandb.run is not None:
+        artifact = wandb.Artifact(
+            name="submission_csv",
+            type="prediction",
+            metadata={
+                "model_type": mt_name,
+                "internal_model_type": internal_model_type,
+                "output_path": str(out_path),
+            },
+        )
+        artifact.add_file(str(out_path))
+        wandb.log_artifact(artifact)
+
+        # run 종료
+        wandb.finish()
 
 
 if __name__ == "__main__":
