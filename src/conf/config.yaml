@@ -11,3 +11,13 @@ output_path: "output_hydra.csv"
 # 어떤 모델을 쓸지 (iforest / sgd / lof / ee 등)
 model_type: IFOREST
 eda_only: false
+
+wandb_project: "chemical-process-anomaly-detection"  # project 이름
+wandb_entity: null        # 팀/조직 없으면 null 그대로
+
+wandb_run_name: "test2"
+
+# 태그는 선택 사항
+wandb_tags:
+  - "baseline"
+  - "iforest"

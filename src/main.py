@@ -4,7 +4,7 @@ import time
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Any
+from typing import Optional, Any, Literal
 from enum import Enum
 import csv
 
@@ -55,6 +55,10 @@ class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     eda_only: bool = False
 
+    wandb_project: Literal[str] = None
+    wandb_entity: Optional[str] = None
+    wandb_run_name: Optional[str] = None
+    wandb_tags: list[str] = field(default_factory=list)
 
 cs = ConfigStore.instance()
 cs.store(name="app_schema", node=AppConfig)
@@ -142,10 +146,11 @@ def hydra_app(cfg: AppConfig) -> None:
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
 
     run = wandb.init(
-        project="chemical-process-anomaly-detection",  # 원하는 프로젝트명
-        # entity="my_team_or_id",  # 팀/조직이 있으면 여기에 추가
+        project=cfg.wandb_project,
+        entity=cfg.wandb_entity,
+        name=cfg.wandb_run_name,
         config=cfg_dict, # type: ignore
-        tags=[mt_name.lower()],  # 예: "iforest", "sgd", ...
+        tags=cfg.wandb_tags,
     )
 
     # 4. 모델 학습
