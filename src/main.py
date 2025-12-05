@@ -109,6 +109,7 @@ def hydra_app(cfg: AppConfig) -> None:
     print("[Hydra] Working directory:", Path.cwd())
 
     set_global_seed(cfg.seed)
+    log.info(f"Global seed set to {cfg.seed}")
 
     if cfg.eda_only:
         print("[Hydra] EDA only mode")
