@@ -1,0 +1,22 @@
+# conf/hydra/job_logging.yaml
+
+defaults:
+  - override hydra/job_logging: default
+
+version: 1
+formatters:
+  simple:
+    format: "[%(levelname)s] %(name)s - %(message)s"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    formatter: simple
+    level: INFO
+    stream: ext://sys.stdout
+
+root:
+  level: INFO
+  handlers: [console]
+
+disable_existing_loggers: false
