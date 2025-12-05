@@ -18,7 +18,7 @@ from config import (
     IsolationForestConfig,
     SGDOneClassSVMConfig,
     LOFConfig,
-    EllipticEnvelopeCfg,
+    EllipticEnvelopeConfig,
 )
 from data_utils import (
     set_global_seed,
@@ -44,7 +44,7 @@ class ModelConfig:
     iforest: IsolationForestConfig = field(default_factory=IsolationForestConfig)
     sgd: SGDOneClassSVMConfig = field(default_factory=SGDOneClassSVMConfig)
     lof: LOFConfig = field(default_factory=LOFConfig)
-    ee: EllipticEnvelopeCfg = field(default_factory=EllipticEnvelopeCfg)
+    ee: EllipticEnvelopeConfig = field(default_factory=EllipticEnvelopeConfig)
 
 
 @dataclass

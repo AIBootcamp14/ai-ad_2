@@ -62,7 +62,7 @@ class LOFConfig:
 
 # EllipticEnvelope용 Config
 @dataclass
-class EllipticEnvelopeCfg:
+class EllipticEnvelopeConfig:
     contamination: float = 0.1
     support_fraction: float | None = None
     random_state: int | None = RANDOM_SEED
@@ -71,4 +71,4 @@ class EllipticEnvelopeCfg:
 DEFAULT_IFOREST_CONFIG = IsolationForestConfig()
 DEFAULT_SGDONECLASS_CONFIG = SGDOneClassSVMConfig()
 DEFAULT_LOF_CONFIG = LOFConfig()
-DEFAULT_EE_CONFIG = EllipticEnvelopeCfg()
+DEFAULT_EE_CONFIG = EllipticEnvelopeConfig()

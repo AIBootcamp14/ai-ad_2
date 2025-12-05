@@ -13,7 +13,7 @@ from config import (
     IsolationForestConfig,
     SGDOneClassSVMConfig,
     LOFConfig,
-    EllipticEnvelopeCfg,
+    EllipticEnvelopeConfig,
     DEFAULT_IFOREST_CONFIG,
     DEFAULT_SGDONECLASS_CONFIG,
     DEFAULT_LOF_CONFIG,
@@ -98,7 +98,7 @@ def build_lof(config: LOFConfig | None = None) -> LocalOutlierFactor:
 
 
 def build_elliptic_envelope(
-    config: EllipticEnvelopeCfg | None = None,
+    config: EllipticEnvelopeConfig | None = None,
 ) -> EllipticEnvelope:
     """
     EllipticEnvelope 모델 생성.
@@ -119,7 +119,7 @@ def build_model(
     if_config: IsolationForestConfig | None = None,
     sgd_config: SGDOneClassSVMConfig | None = None,
     lof_config: LOFConfig | None = None,
-    ee_config: EllipticEnvelopeCfg | None = None,
+    ee_config: EllipticEnvelopeConfig | None = None,
 ) -> AnomalyModel:
     if model_type == "IsolationForest":
         return build_isolation_forest(config=if_config)
@@ -139,7 +139,7 @@ def train_model(
     if_config: IsolationForestConfig | None = None,
     sgd_config: SGDOneClassSVMConfig | None = None,
     lof_config: LOFConfig | None = None,
-    ee_config: EllipticEnvelopeCfg | None = None,
+    ee_config: EllipticEnvelopeConfig | None = None,
 ) -> AnomalyModel:
     """
     Polars DataFrame 을 입력으로 받아 sklearn 이상탐지 모델을 학습합니다.
