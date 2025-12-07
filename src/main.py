@@ -208,10 +208,10 @@ def hydra_app(cfg: AppConfig) -> None:
         )
         artifact.add_file(str(out_path))
         wandb.log_artifact(artifact)
-        wandb.finish()
 
         # run 종료
         wandb.finish()
+
 
 
 if __name__ == "__main__":
