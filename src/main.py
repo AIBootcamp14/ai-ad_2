@@ -55,6 +55,7 @@ class AppConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     eda_only: bool = False
 
+    use_wandb: bool = True
     wandb_project: Optional[str] = None
     wandb_entity: Optional[str] = None
     wandb_run_name: Optional[str] = None
@@ -146,13 +147,18 @@ def hydra_app(cfg: AppConfig) -> None:
     # 3. Weights & Biases 초기화
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
 
-    run = wandb.init(
-        project=cfg.wandb_project,
-        entity=cfg.wandb_entity,
-        name=cfg.wandb_run_name,
-        config=cfg_dict, # type: ignore
-        tags=cfg.wandb_tags,
-    )
+    run = None
+    if cfg.use_wandb and cfg.wandb_project is not None:
+        run = wandb.init(
+            project=cfg.wandb_project,
+            entity=cfg.wandb_entity,
+            name=cfg.wandb_run_name,
+            config=cfg_dict,  # type: ignore
+            tags=cfg.wandb_tags,
+        )
+        log.info(f"[W&B] Initialized run: {wandb.run.name}") # type: ignore
+    else:
+        log.info("[W&B] Disabled (use_wandb=False or wandb_project is None)")
 
     # 4. 모델 학습
     train_start = time.perf_counter()
@@ -166,7 +172,8 @@ def hydra_app(cfg: AppConfig) -> None:
     )
     train_elapsed = time.perf_counter() - train_start
     log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
-    wandb.log({"time/train_elapsed_sec": train_elapsed})
+    if wandb.run is not None:
+        wandb.log({"time/train_elapsed_sec": train_elapsed})
 
     # 5. 추론
     infer_start = time.perf_counter()
@@ -176,11 +183,13 @@ def hydra_app(cfg: AppConfig) -> None:
 
     infer_elapsed = time.perf_counter() - infer_start
     log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
-    wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+    if wandb.run is not None:
+        wandb.log({"time/infer_elapsed_sec": infer_elapsed})
 
     total_elapsed = time.perf_counter() - total_start
     log.info(f"[TOTAL] Full run elapsed: {total_elapsed:.3f} seconds")
-    wandb.log({"time/total_elapsed_sec": total_elapsed})
+    if wandb.run is not None:
+        wandb.log({"time/total_elapsed_sec": total_elapsed})
 
     # 6. 저장 (`,faultNumber` 형식)
     out_path = Path(to_absolute_path(cfg.output_path))
@@ -199,6 +208,7 @@ def hydra_app(cfg: AppConfig) -> None:
         )
         artifact.add_file(str(out_path))
         wandb.log_artifact(artifact)
+        wandb.finish()
 
         # run 종료
         wandb.finish()
