@@ -8,6 +8,8 @@ from typing import Optional, Any
 from enum import Enum
 import csv
 
+import numpy as np
+import polars as pl
 import wandb
 from omegaconf import OmegaConf
 import hydra
@@ -36,6 +38,7 @@ class ModelType(str, Enum):
     SGD = "sgd"
     LOF = "lof"
     EE = "ee"
+    ENSEMBLE = "ensemble"
 
 
 @dataclass
@@ -54,6 +57,16 @@ class AppConfig:
     model_type: ModelType = ModelType.IFOREST
     model: ModelConfig = field(default_factory=ModelConfig)
     eda_only: bool = False
+
+    ensemble_models: list[ModelType] = field(
+        default_factory=lambda: [
+            ModelType.IFOREST,
+            ModelType.SGD,
+            ModelType.LOF,
+            ModelType.EE,
+        ]
+    )
+    ensemble_vote_threshold: float = 0.5
 
     use_wandb: bool = True
     wandb_project: Optional[str] = None
@@ -99,6 +112,28 @@ def save_predictions_as_submission(pred_df: Any, output_path: Path | str) -> Non
     print(f"[Hydra] Saved predictions to {output_path.resolve()}")
 
 
+def _get_internal_model_and_kwargs(
+    mt: ModelType,
+    cfg: AppConfig,
+) -> tuple[str, dict[str, Any]]:
+    """
+    단일 모델 학습을 위해
+    - 내부 model_type 문자열 (IsolationForest 등)
+    - train_model 에 넘길 config kwargs
+    를 반환하는 헬퍼 함수.
+    """
+    if mt == ModelType.IFOREST:
+        return "IsolationForest", {"if_config": cfg.model.iforest}
+    elif mt == ModelType.SGD:
+        return "SGDOneClassSVM", {"sgd_config": cfg.model.sgd}
+    elif mt == ModelType.LOF:
+        return "LocalOutlierFactor", {"lof_config": cfg.model.lof}
+    elif mt == ModelType.EE:
+        return "EllipticEnvelope", {"ee_config": cfg.model.ee}
+    else:
+        raise ValueError(f"Unsupported single ModelType for internal mapping: {mt}")
+
+
 @hydra.main(version_base=None, config_name="config", config_path="conf")
 def hydra_app(cfg: AppConfig) -> None:
     """
@@ -123,28 +158,7 @@ def hydra_app(cfg: AppConfig) -> None:
     train_X = process_data(train_df)
     test_X = process_data(test_df)
 
-    # 2. model_type 해석 (Enum 또는 문자열 모두 대응)
-    mt = cfg.model_type
-
-    # Enum이면 .name 사용, 문자열이면 바로 사용
-    if isinstance(mt, Enum):
-        mt_name = mt.name  # IFOREST / SGD / LOF / EE
-    else:
-        mt_name = str(mt).upper()
-
-    model_type_map = {
-        "IFOREST": "IsolationForest",
-        "SGD": "SGDOneClassSVM",
-        "LOF": "LocalOutlierFactor",
-        "EE": "EllipticEnvelope",
-    }
-
-    if mt_name not in model_type_map:
-        raise ValueError(f"Unknown model_type: {mt} (normalized: {mt_name})")
-
-    internal_model_type = model_type_map[mt_name]
-
-    # 3. Weights & Biases 초기화
+    # 2. W&B 설정
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
 
     run = None
@@ -156,54 +170,119 @@ def hydra_app(cfg: AppConfig) -> None:
             config=cfg_dict,  # type: ignore
             tags=cfg.wandb_tags,
         )
-        log.info(f"[W&B] Initialized run: {wandb.run.name}") # type: ignore
+        log.info(f"[W&B] Initialized run: {wandb.run.name}")  # type: ignore
     else:
         log.info("[W&B] Disabled (use_wandb=False or wandb_project is None)")
 
-    # 4. 모델 학습
-    train_start = time.perf_counter()
-    model = train_model(
-        train_X=train_X,
-        model_type=internal_model_type,  # "SGDOneClassSVM" 등 # type: ignore
-        if_config=cfg.model.iforest if cfg.model_type == ModelType.IFOREST else None,
-        sgd_config=cfg.model.sgd if cfg.model_type == ModelType.SGD else None,
-        lof_config=cfg.model.lof if cfg.model_type == ModelType.LOF else None,
-        ee_config=cfg.model.ee if cfg.model_type == ModelType.EE else None,
-    )
-    train_elapsed = time.perf_counter() - train_start
-    log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
-    if wandb.run is not None:
-        wandb.log({"time/train_elapsed_sec": train_elapsed})
+    # 3. 모델 학습 & 추론
+    # 3-1. 앙상블 모드
+    if cfg.model_type == ModelType.ENSEMBLE:
+        log.info(f"[ENSEMBLE] Using models: {cfg.ensemble_models}")
+        train_start = time.perf_counter()
 
-    # 5. 추론
-    infer_start = time.perf_counter()
-    pred_df = inference(test_X=test_X, model=model)
-    print("[Hydra] Prediction head:")
-    print(pred_df.head())
+        # 각 서브 모델별 예측값 리스트 (numpy 배열)
+        preds_list: list[np.ndarray] = []
 
-    infer_elapsed = time.perf_counter() - infer_start
-    log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
-    if wandb.run is not None:
-        wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+        for sub_mt in cfg.ensemble_models:
+            # ENSEMBLE 같은 잘못된 값이 들어오지 않도록 방어
+            if sub_mt == ModelType.ENSEMBLE:
+                raise ValueError("ensemble_models 안에 ENSEMBLE 을 넣을 수 없습니다.")
 
+            internal_model_type, kwargs = _get_internal_model_and_kwargs(sub_mt, cfg)
+            log.info(f"[ENSEMBLE] Training sub model: {sub_mt} ({internal_model_type})")
+
+            # 단일 모델 학습
+            sub_model = train_model(
+                train_X=train_X,
+                model_type=internal_model_type,  # "IsolationForest" 등
+                **kwargs,
+            )
+
+            # 단일 모델 추론
+            sub_pred_df = inference(test_X=test_X, model=sub_model)
+            log.info(
+                f"[ENSEMBLE] Sub model {sub_mt} prediction head:\n"
+                f"{sub_pred_df.head()}"
+            )
+
+            # Polars → numpy (0/1 레이블)
+            sub_pred = sub_pred_df["faultNumber"].to_numpy()
+            preds_list.append(sub_pred)
+
+        train_elapsed = time.perf_counter() - train_start
+        log.info(f"[ENSEMBLE][TRAIN] elapsed: {train_elapsed:.3f} seconds")
+        if wandb.run is not None:
+            wandb.log({"time/train_elapsed_sec": train_elapsed})
+            wandb.log({"ensemble/num_models": len(preds_list)})
+
+        # 각 모델의 예측을 (n_models, n_samples) 로 쌓아서 평균 → threshold
+        infer_start = time.perf_counter()
+        preds_array = np.stack(preds_list, axis=0)  # (M, N)
+        mean_scores = preds_array.mean(axis=0)      # (N,)
+
+        threshold = cfg.ensemble_vote_threshold
+        final_labels = (mean_scores >= threshold).astype(int)
+
+        pred_df = pl.DataFrame({"faultNumber": final_labels})
+        print("[Hydra][ENSEMBLE] Prediction head:")
+        print(pred_df.head())
+
+        infer_elapsed = time.perf_counter() - infer_start
+        log.info(f"[ENSEMBLE][INFER] elapsed: {infer_elapsed:.3f} seconds")
+        if wandb.run is not None:
+            wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+            wandb.log({"ensemble/vote_threshold": threshold})
+
+    # 3-2. 단일 모델 모드 (기존 로직)
+    else:
+        mt = cfg.model_type
+        internal_model_type, kwargs = _get_internal_model_and_kwargs(mt, cfg)
+        log.info(
+            f"[SINGLE] Training model_type={mt} "
+            f"(internal={internal_model_type})"
+        )
+
+        train_start = time.perf_counter()
+        model = train_model(
+            train_X=train_X,
+            model_type=internal_model_type,
+            **kwargs,
+        )
+        train_elapsed = time.perf_counter() - train_start
+        log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
+        if wandb.run is not None:
+            wandb.log({"time/train_elapsed_sec": train_elapsed})
+
+        infer_start = time.perf_counter()
+        pred_df = inference(test_X=test_X, model=model)
+        print("[Hydra] Prediction head:")
+        print(pred_df.head())
+
+        infer_elapsed = time.perf_counter() - infer_start
+        log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
+        if wandb.run is not None:
+            wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+
+    # 공통 후처리 (제출 파일 저장 & W&B artifact 업로드)
     total_elapsed = time.perf_counter() - total_start
     log.info(f"[TOTAL] Full run elapsed: {total_elapsed:.3f} seconds")
     if wandb.run is not None:
         wandb.log({"time/total_elapsed_sec": total_elapsed})
 
-    # 6. 저장 (`,faultNumber` 형식)
+    # 4. 저장 (`,faultNumber` 형식)
     out_path = Path(to_absolute_path(cfg.output_path))
     save_predictions_as_submission(pred_df, out_path)
 
-    # 7. 제출 파일을 W&B Artifact로 업로드
+    # 5. 제출 파일을 W&B Artifact로 업로드
     if wandb.run is not None:
         artifact = wandb.Artifact(
             name="submission_csv",
             type="prediction",
             metadata={
-                "model_type": mt_name,
-                "internal_model_type": internal_model_type,
+                "model_type": str(cfg.model_type),
                 "output_path": str(out_path),
+                "ensemble_models": [str(m) for m in cfg.ensemble_models],
+                "ensemble_vote_threshold": cfg.ensemble_vote_threshold,
             },
         )
         artifact.add_file(str(out_path))
@@ -211,7 +290,6 @@ def hydra_app(cfg: AppConfig) -> None:
 
         # run 종료
         wandb.finish()
-
 
 
 if __name__ == "__main__":

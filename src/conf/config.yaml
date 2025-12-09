@@ -1,24 +1,45 @@
 # conf/config.yaml
 
 defaults:
+  - app_schema
   - model: iforest
   - _self_
 
 # 공통 설정
 seed: 42
-output_path: "output_hydra.csv"
 
-# 어떤 모델을 쓸지 (iforest / sgd / lof / ee 등)
-model_type: IFOREST
+# 앙상블 결과 제출 파일 이름
+output_path: "output_ensemble.csv"
+
+# 어떤 모델 모드를 쓸지
+#  - 단일 모델: iforest / sgd / lof / ee
+#  - 앙상블: ensemble
+model_type: ENSEMBLE
+
+# EDA만 돌리고 싶으면 true
 eda_only: false
 
+# 앙상블 설정 (model_type: ensemble 일 때만 사용)
+# 어떤 서브 모델들을 앙상블에 포함할지
+ensemble_models:
+  - IFOREST
+  - LOF
+  - EE
+  # - sgd
+
+# Hard voting 임계값
+#  - 각 모델 예측(0/1)의 평균이 threshold 이상이면 1(이상), 아니면 0(정상)
+ensemble_vote_threshold: 0.5
+
+# W&B 설정
 use_wandb: true
-wandb_project: "chemical-process-anomaly-detection"  # project 이름
-wandb_entity: null        # 팀/조직 없으면 null 그대로
+wandb_project: "chemical-process-anomaly-detection"
+wandb_entity: null
 
 wandb_run_name: "${now:%Y%m%d_%H%M%S}_${model_type}_kmc"
 
-# 태그는 선택 사항
 wandb_tags:
-  - "baseline"
+  - "ensemble"
   - "iforest"
+  - "lof"
+  - "ee"
