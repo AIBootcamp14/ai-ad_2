@@ -194,7 +194,7 @@ def hydra_app(cfg: AppConfig) -> None:
             # 단일 모델 학습
             sub_model = train_model(
                 train_X=train_X,
-                model_type=internal_model_type,  # "IsolationForest" 등
+                model_type=internal_model_type,  # "IsolationForest" 등 # type: ignore
                 **kwargs,
             )
 
@@ -245,7 +245,7 @@ def hydra_app(cfg: AppConfig) -> None:
         train_start = time.perf_counter()
         model = train_model(
             train_X=train_X,
-            model_type=internal_model_type,
+            model_type=internal_model_type, # type: ignore
             **kwargs,
         )
         train_elapsed = time.perf_counter() - train_start

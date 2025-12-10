@@ -12,8 +12,8 @@ seed: 42
 output_path: "output_ensemble.csv"
 
 # 어떤 모델 모드를 쓸지
-#  - 단일 모델: iforest / sgd / lof / ee
-#  - 앙상블: ensemble
+#  - 단일 모델: IFOREST / SGD / LOF / EE
+#  - 앙상블: ENSEMBLE
 model_type: ENSEMBLE
 
 # EDA만 돌리고 싶으면 true
@@ -25,13 +25,13 @@ ensemble_models:
   - IFOREST
   - LOF
   - EE
-  # - sgd
+  # - SGD
 
 # Hard voting 임계값
 #  - 각 모델 예측(0/1)의 평균이 threshold 이상이면 1(이상), 아니면 0(정상)
 ensemble_vote_threshold: 0.5
 
-# W&B 설정
+# wandb 설정
 use_wandb: true
 wandb_project: "chemical-process-anomaly-detection"
 wandb_entity: null
