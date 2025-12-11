@@ -67,8 +67,42 @@ class EllipticEnvelopeConfig:
     support_fraction: float | None = None
     random_state: int | None = RANDOM_SEED
 
+# LSTM AutoEncoder용 Config (딥러닝용)
+@dataclass
+class LSTMAEConfig:
+    # 입력 차원은 train_X.shape[1]에서 자동으로 설정하게 할 것이므로 보통 None으로 둠
+    input_dim: int | None = None
+
+    # LSTM AutoEncoder 구조 관련
+    hidden_dim: int = 64
+    latent_dim: int = 16
+    num_layers: int = 2
+    dropout: float = 0.1
+
+    # 시계열 윈도우 관련
+    window_size: int = 30
+    window_stride: int = 1
+
+    # 학습 관련
+    batch_size: int = 128
+    num_epochs: int = 20
+    lr: float = 1e-3
+    weight_decay: float = 1e-5
+    clip_grad_norm: float | None = 1.0
+
+    # device 지정 (None이면 자동으로 "cuda" 또는 "cpu")
+    device: str | None = None
+
+    # 이상치 판별 임계값 (train point-wise reconstruction error 상위 q%)
+    threshold_quantile: float = 0.995
+
+    # epoch별 로그 출력 여부
+    print_progress: bool = True
+
+
 # 기본값
 DEFAULT_IFOREST_CONFIG = IsolationForestConfig()
 DEFAULT_SGDONECLASS_CONFIG = SGDOneClassSVMConfig()
 DEFAULT_LOF_CONFIG = LOFConfig()
 DEFAULT_EE_CONFIG = EllipticEnvelopeConfig()
+DEFAULT_LSTMAE_CONFIG = LSTMAEConfig()

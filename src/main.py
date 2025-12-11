@@ -21,6 +21,7 @@ from config import (
     SGDOneClassSVMConfig,
     LOFConfig,
     EllipticEnvelopeConfig,
+    LSTMAEConfig,
 )
 from data_utils import (
     set_global_seed,
@@ -29,6 +30,10 @@ from data_utils import (
     process_data,
 )
 from model_utils import train_model, inference
+from deep_model_utils import (
+    train_lstm_autoencoder,
+    inference_lstm_autoencoder,
+)
 from eda import run_eda  # run_eda를 eda.py에 옮겨 두었으면 거기서 import
 
 log = logging.getLogger(__name__)
@@ -38,6 +43,7 @@ class ModelType(str, Enum):
     SGD = "sgd"
     LOF = "lof"
     EE = "ee"
+    LSTM_AE = "lstm_ae"
     ENSEMBLE = "ensemble"
 
 
@@ -48,6 +54,7 @@ class ModelConfig:
     sgd: SGDOneClassSVMConfig = field(default_factory=SGDOneClassSVMConfig)
     lof: LOFConfig = field(default_factory=LOFConfig)
     ee: EllipticEnvelopeConfig = field(default_factory=EllipticEnvelopeConfig)
+    lstm_ae: LSTMAEConfig = field(default_factory=LSTMAEConfig)
 
 
 @dataclass
@@ -236,32 +243,68 @@ def hydra_app(cfg: AppConfig) -> None:
     # 3-2. 단일 모델 모드 (기존 로직)
     else:
         mt = cfg.model_type
-        internal_model_type, kwargs = _get_internal_model_and_kwargs(mt, cfg)
-        log.info(
-            f"[SINGLE] Training model_type={mt} "
-            f"(internal={internal_model_type})"
-        )
 
-        train_start = time.perf_counter()
-        model = train_model(
-            train_X=train_X,
-            model_type=internal_model_type, # type: ignore
-            **kwargs,
-        )
-        train_elapsed = time.perf_counter() - train_start
-        log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
-        if wandb.run is not None:
-            wandb.log({"time/train_elapsed_sec": train_elapsed})
+        # LSTM-AE
+        if mt == ModelType.LSTM_AE:
+            log.info("[SINGLE][LSTM_AE] Training LSTM AutoEncoder model")
 
-        infer_start = time.perf_counter()
-        pred_df = inference(test_X=test_X, model=model)
-        print("[Hydra] Prediction head:")
-        print(pred_df.head())
+            lstm_cfg = cfg.model.lstm_ae
 
-        infer_elapsed = time.perf_counter() - infer_start
-        log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
-        if wandb.run is not None:
-            wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+            # 학습
+            train_start = time.perf_counter()
+            artifacts = train_lstm_autoencoder(
+                train_X=train_X,
+                cfg=lstm_cfg,
+            )
+            train_elapsed = time.perf_counter() - train_start
+            log.info(f"[LSTM_AE][TRAIN] elapsed: {train_elapsed:.3f} seconds")
+            if wandb.run is not None:
+                wandb.log({"time/train_elapsed_sec": train_elapsed})
+
+            # 추론
+            infer_start = time.perf_counter()
+            pred_df = inference_lstm_autoencoder(
+                test_X=test_X,
+                artifacts=artifacts,
+                cfg=lstm_cfg,
+            )
+            infer_elapsed = time.perf_counter() - infer_start
+            log.info(f"[LSTM_AE][INFER] elapsed: {infer_elapsed:.3f} seconds")
+            if wandb.run is not None:
+                wandb.log({"time/infer_elapsed_sec": infer_elapsed})
+
+            print("[Hydra][LSTM_AE] Prediction head:")
+            print(pred_df.head())
+
+        # sklearn 단일 모델 로직
+        else:
+            internal_model_type, kwargs = _get_internal_model_and_kwargs(mt, cfg)
+            log.info(
+                f"[SINGLE] Training model_type={mt} "
+                f"(internal={internal_model_type})"
+            )
+
+            # 학습
+            train_start = time.perf_counter()
+            model = train_model(
+                train_X=train_X,
+                model_type=internal_model_type,  # type: ignore
+                **kwargs,
+            )
+            train_elapsed = time.perf_counter() - train_start
+            log.info(f"[TRAIN] elapsed: {train_elapsed:.3f} seconds")
+            if wandb.run is not None:
+                wandb.log({"time/train_elapsed_sec": train_elapsed})
+
+            # 추론
+            infer_start = time.perf_counter()
+            pred_df = inference(test_X=test_X, model=model)
+            print("[Hydra] Prediction head:")
+            print(pred_df.head())
+            infer_elapsed = time.perf_counter() - infer_start
+            log.info(f"[INFER] elapsed: {infer_elapsed:.3f} seconds")
+            if wandb.run is not None:
+                wandb.log({"time/infer_elapsed_sec": infer_elapsed})
 
     # 공통 후처리 (제출 파일 저장 & W&B artifact 업로드)
     total_elapsed = time.perf_counter() - total_start
