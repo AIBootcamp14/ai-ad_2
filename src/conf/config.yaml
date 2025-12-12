@@ -9,7 +9,7 @@ defaults:
 seed: 42
 
 # 앙상블 결과 제출 파일 이름
-output_path: "output_lstmae.csv"
+output_path: "output_${model_type}.csv"
 
 # 어떤 모델 모드를 쓸지
 #  - 단일 모델: IFOREST / SGD / LOF / EE / LSTM_AE

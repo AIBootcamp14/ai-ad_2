@@ -250,11 +250,14 @@ def hydra_app(cfg: AppConfig) -> None:
 
             lstm_cfg = cfg.model.lstm_ae
 
+            train_group = train_df["simulationRun"].to_numpy()
+            test_group  = test_df["simulationRun"].to_numpy()
             # 학습
             train_start = time.perf_counter()
             artifacts = train_lstm_autoencoder(
                 train_X=train_X,
                 cfg=lstm_cfg,
+                group_ids=train_group,
             )
             train_elapsed = time.perf_counter() - train_start
             log.info(f"[LSTM_AE][TRAIN] elapsed: {train_elapsed:.3f} seconds")
@@ -267,6 +270,7 @@ def hydra_app(cfg: AppConfig) -> None:
                 test_X=test_X,
                 artifacts=artifacts,
                 cfg=lstm_cfg,
+                group_ids=test_group,
             )
             infer_elapsed = time.perf_counter() - infer_start
             log.info(f"[LSTM_AE][INFER] elapsed: {infer_elapsed:.3f} seconds")

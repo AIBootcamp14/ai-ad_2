@@ -138,6 +138,74 @@ def _aggregate_window_scores_to_point_scores(
     return point_scores.astype(np.float32)
 
 
+def _create_sequences_by_group(
+    arr: np.ndarray,
+    group_ids: np.ndarray,
+    window_size: int,
+    window_stride: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    group_ids(예: simulationRun) 별로만 슬라이딩 윈도우를 만든다.
+
+    반환:
+      sequences: (N_windows, T, F)
+      window_point_indices: (N_windows, T)  # 각 윈도우가 참조하는 '원본 row 인덱스'
+    """
+    if arr.ndim != 2:
+        raise ValueError(f"Expected 2D array, got shape {arr.shape}")
+    if group_ids.ndim != 1 or len(group_ids) != arr.shape[0]:
+        raise ValueError("group_ids must be 1D and same length as arr")
+
+    sequences: list[np.ndarray] = []
+    window_indices: list[np.ndarray] = []
+
+    # run id 등장 순서를 보존 (np.unique는 정렬되므로 주의)
+    seen = set()
+    ordered_runs = []
+    for g in group_ids.tolist():
+        if g not in seen:
+            seen.add(g)
+            ordered_runs.append(g)
+
+    for run in ordered_runs:
+        idx = np.where(group_ids == run)[0]
+        if idx.size < window_size:
+            continue
+
+        # 안전하게 오름차순 정렬(대부분 이미 정렬되어 있겠지만 방어)
+        idx = np.sort(idx)
+
+        for start_pos in range(0, idx.size - window_size + 1, window_stride):
+            inds = idx[start_pos : start_pos + window_size]  # (T,)
+            sequences.append(arr[inds])      # (T, F)
+            window_indices.append(inds)      # (T,)
+
+    if len(sequences) == 0:
+        raise ValueError("No sequences created: check window_size/window_stride and group sizes.")
+
+    return np.stack(sequences, axis=0), np.stack(window_indices, axis=0)
+
+
+def _aggregate_window_scores_to_point_scores_by_indices(
+    num_points: int,
+    window_scores: np.ndarray,          # (N_windows,)
+    window_point_indices: np.ndarray,   # (N_windows, T)
+) -> np.ndarray:
+    """
+    각 윈도우 점수를, 윈도우가 덮는 '원본 row 인덱스'들에 누적/평균해서 point score로 만든다.
+    """
+    point_scores = np.zeros(num_points, dtype=np.float64)
+    counts = np.zeros(num_points, dtype=np.int64)
+
+    for score, inds in zip(window_scores, window_point_indices):
+        point_scores[inds] += float(score)
+        counts[inds] += 1
+
+    counts[counts == 0] = 1
+    point_scores /= counts
+    return point_scores.astype(np.float32)
+
+
 # LSTM AutoEncoder 모델 정의
 class LSTMAutoEncoder(nn.Module):
     """
@@ -217,6 +285,7 @@ def _get_device(cfg: LSTMAEConfig) -> torch.device:
 def train_lstm_autoencoder(
     train_X: pl.DataFrame,
     cfg: Optional[LSTMAEConfig] = None,
+    group_ids: Optional[np.ndarray] = None,
 ) -> LSTMAEArtifacts:
     """
     Polars DataFrame(train_X)을 받아 LSTM AutoEncoder를 학습하고,
@@ -241,11 +310,23 @@ def train_lstm_autoencoder(
     arr_norm = scaler.transform(arr)
 
     # 시퀀스 생성
-    sequences, start_indices = _create_sequences(
-        arr=arr_norm,
-        window_size=cfg.window_size,
-        window_stride=cfg.window_stride,
-    )  # sequences: (N_windows, T, F)
+    # ✅ 시퀀스 생성 (run별)
+    if group_ids is not None:
+        sequences, window_point_indices = _create_sequences_by_group(
+            arr=arr_norm,
+            group_ids=group_ids,
+            window_size=cfg.window_size,
+            window_stride=cfg.window_stride,
+        )
+    else:
+        sequences, start_indices = _create_sequences(
+            arr=arr_norm,
+            window_size=cfg.window_size,
+            window_stride=cfg.window_stride,
+        )
+        # start_indices -> (N_windows, T)로 변환
+        T = cfg.window_size
+        window_point_indices = start_indices[:, None] + np.arange(T)[None, :]
 
     dataset = SequenceDataset(sequences)
     train_loader = DataLoader(
@@ -327,12 +408,11 @@ def train_lstm_autoencoder(
     window_scores = np.concatenate(all_window_scores, axis=0)  # (N_windows,)
 
     # 윈도우 score -> point-wise score 집계
-    point_scores = _aggregate_window_scores_to_point_scores(
+    point_scores = _aggregate_window_scores_to_point_scores_by_indices(
         num_points=num_points,
-        window_size=cfg.window_size,
         window_scores=window_scores,
-        window_starts=start_indices,
-    )  # (N,)
+        window_point_indices=window_point_indices,
+    ) # (N,)
 
     # threshold 계산 (train 기준)
     threshold = float(np.quantile(point_scores, cfg.threshold_quantile))
@@ -358,6 +438,7 @@ def inference_lstm_autoencoder(
     test_X: pl.DataFrame,
     artifacts: LSTMAEArtifacts,
     cfg: Optional[LSTMAEConfig] = None,
+    group_ids: Optional[np.ndarray] = None,
 ) -> pl.DataFrame:
     """
     학습된 LSTM-AE artifacts + test_X(Polars DataFrame)를 받아
@@ -386,11 +467,21 @@ def inference_lstm_autoencoder(
 
     arr_norm = scaler.transform(arr)
 
-    sequences, start_indices = _create_sequences(
-        arr=arr_norm,
-        window_size=window_size,
-        window_stride=window_stride,
-    )
+    if group_ids is not None:
+        sequences, window_point_indices = _create_sequences_by_group(
+            arr=arr_norm,
+            group_ids=group_ids,
+            window_size=window_size,
+            window_stride=window_stride,
+        )
+    else:
+        sequences, start_indices = _create_sequences(
+            arr=arr_norm,
+            window_size=window_size,
+            window_stride=window_stride,
+        )
+        T = window_size
+        window_point_indices = start_indices[:, None] + np.arange(T)[None, :]
     dataset = SequenceDataset(sequences)
 
     # 윈도우별 reconstruction error 계산
@@ -415,15 +506,14 @@ def inference_lstm_autoencoder(
     window_scores = np.concatenate(all_window_scores, axis=0)
 
     # point-wise score로 집계
-    point_scores = _aggregate_window_scores_to_point_scores(
+    point_scores = _aggregate_window_scores_to_point_scores_by_indices(
         num_points=num_points,
-        window_size=window_size,
         window_scores=window_scores,
-        window_starts=start_indices,
+        window_point_indices=window_point_indices,
     )
 
     # threshold 기반 이상치 판별
-    labels = (point_scores > threshold).astype(np.int32)
+    labels = (point_scores > threshold).astype(int)
 
     pred_df = pl.DataFrame({"faultNumber": labels})
     return pred_df
