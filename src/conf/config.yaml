@@ -23,7 +23,7 @@ preprocess:
 # 어떤 모델 모드를 쓸지
 #  - 단일 모델: IFOREST / SGD / LOF / EE / LSTM_AE
 #  - 앙상블: ENSEMBLE
-model_type: ENSEMBLE
+model_type: LSTM_AE
 
 # EDA만 돌리고 싶으면 true
 eda_only: false

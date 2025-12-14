@@ -337,7 +337,6 @@ def train_lstm_autoencoder(
 
     # 모델/옵티마 설정
     device = _get_device(cfg)
-    torch.manual_seed(RANDOM_SEED)
 
     model = LSTMAutoEncoder(
         input_dim=cfg.input_dim, # type: ignore

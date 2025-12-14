@@ -32,7 +32,7 @@ class IsolationForestConfig:
     max_features: float = 1.0                 # feature 비율
     bootstrap: bool = False
     n_jobs: int | None = -1
-    random_state: int | None = RANDOM_SEED
+    random_state: int | None = None
     verbose: int = 0
     warm_start: bool = False
 
@@ -47,7 +47,7 @@ class SGDOneClassSVMConfig:
     max_iter: int = 1000
     tol: float = 1e-3
     shuffle: bool = True
-    random_state: int | None = RANDOM_SEED
+    random_state: int | None = None
     verbose: int = 0
     # 필요하면 loss, penalty, alpha 등도 추가 가능
 
@@ -65,11 +65,12 @@ class LOFConfig:
 class EllipticEnvelopeConfig:
     contamination: float = 0.1
     support_fraction: float | None = None
-    random_state: int | None = RANDOM_SEED
+    random_state: int | None = None
 
 # LSTM AutoEncoder용 Config (딥러닝용)
 @dataclass
 class LSTMAEConfig:
+    seed: int | None = None
     # 입력 차원은 train_X.shape[1]에서 자동으로 설정하게 할 것이므로 보통 None으로 둠
     input_dim: int | None = None
 

@@ -1,6 +1,8 @@
 # conf/model/lstm_ae.yaml
 
 lstm_ae:
+  seed: ${seed}
+
   hidden_dim: 64
   latent_dim: 16
   num_layers: 2
