@@ -43,7 +43,7 @@ class SGDOneClassSVMConfig:
     SGDOneClassSVM 하이퍼파라미터 설정용 dataclass.
     (여기서는 자주 건드릴만한 몇 개만 노출해둔다)
     """
-    nu: float = 0.5                # 이상치 비율 비슷한 역할(클래스 분리 마진)
+    nu: float = 0.01                # 이상치 비율 비슷한 역할(클래스 분리 마진)
     max_iter: int = 1000
     tol: float = 1e-3
     shuffle: bool = True

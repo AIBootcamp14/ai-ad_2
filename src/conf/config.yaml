@@ -11,10 +11,19 @@ seed: 42
 # 앙상블 결과 제출 파일 이름
 output_path: "output_${model_type}.csv"
 
+# 스케일러 설정
+preprocess:
+  enabled: true
+  scaler: "standard"      # "standard" | "robust" | "none"
+  with_centering: true
+  with_scaling: true
+  quantile_range: [25.0, 75.0]
+  clip: null              # 예: 10.0
+
 # 어떤 모델 모드를 쓸지
 #  - 단일 모델: IFOREST / SGD / LOF / EE / LSTM_AE
 #  - 앙상블: ENSEMBLE
-model_type: LSTM_AE
+model_type: EE
 
 # EDA만 돌리고 싶으면 true
 eda_only: false
@@ -39,7 +48,11 @@ wandb_entity: null
 wandb_run_name: "${now:%Y%m%d_%H%M%S}_${model_type}_kmc"
 
 wandb_tags:
-  - "ensemble"
-  - "iforest"
-  - "lof"
+  # - "ensemble"
+  # - "iforest"
+  # - "lof"
   - "ee"
+
+hydra:
+  job:
+    chdir: false

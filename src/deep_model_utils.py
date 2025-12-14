@@ -309,8 +309,7 @@ def train_lstm_autoencoder(
     scaler = StandardScaler.fit(arr)
     arr_norm = scaler.transform(arr)
 
-    # 시퀀스 생성
-    # ✅ 시퀀스 생성 (run별)
+    # 시퀀스 생성 (run별)
     if group_ids is not None:
         sequences, window_point_indices = _create_sequences_by_group(
             arr=arr_norm,

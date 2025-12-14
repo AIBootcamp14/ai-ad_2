@@ -172,6 +172,7 @@ def inference(test_X: pl.DataFrame, model: AnomalyModel) -> pl.DataFrame:
     pred_y = model.predict(X)
 
     # inliers: 1 -> 0 , outliers: -1 -> 1
-    pred_y = (pred_y == -1).astype(int)
+    if -1 in pred_y:
+        pred_y = (pred_y == -1).astype(int)
 
     return pl.DataFrame({label_col: pred_y})

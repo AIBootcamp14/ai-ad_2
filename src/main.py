@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 import hydra
 from hydra.utils import to_absolute_path
 from hydra.core.config_store import ConfigStore
+from sklearn.preprocessing import StandardScaler, RobustScaler
 
 from config import (
     IsolationForestConfig,
@@ -58,12 +59,74 @@ class ModelConfig:
 
 
 @dataclass
+class PreprocessConfig:
+    enabled: bool = True
+    # "none" | "standard" | "robust"
+    scaler: str = "standard"
+
+    # StandardScaler: with_mean/with_std
+    # RobustScaler: with_centering/with_scaling
+    with_centering: bool = True
+    with_scaling: bool = True
+
+    # RobustScaler 전용(하지만 통일해서 둬도 무방)
+    quantile_range: tuple[float, float] = (25.0, 75.0)
+
+    # 선택: 이상치로 인한 수치 폭발 완화
+    clip: float | None = None
+
+
+def _fit_preprocess(train_X: pl.DataFrame, pp: PreprocessConfig):
+    cols = train_X.columns
+    X = train_X.to_numpy()
+
+    if (not pp.enabled) or pp.scaler == "none":
+        return train_X, None
+
+    if pp.scaler == "standard":
+        scaler = StandardScaler(
+            with_mean=pp.with_centering,
+            with_std=pp.with_scaling,
+        )
+    elif pp.scaler == "robust":
+        scaler = RobustScaler(
+            with_centering=pp.with_centering,
+            with_scaling=pp.with_scaling,
+            quantile_range=tuple(pp.quantile_range), # type: ignore
+        )
+    else:
+        raise ValueError(f"Unsupported preprocess.scaler: {pp.scaler}")
+
+    Xs = scaler.fit_transform(X)
+    if pp.clip is not None:
+        Xs = np.clip(Xs, -pp.clip, pp.clip)
+
+    return pl.DataFrame(Xs, schema=cols), scaler
+
+
+def _apply_preprocess(X_df: pl.DataFrame, pp: PreprocessConfig, scaler):
+    if scaler is None:
+        return X_df
+
+    cols = X_df.columns
+    X = X_df.to_numpy()
+    Xs = scaler.transform(X)
+    if pp.clip is not None:
+        Xs = np.clip(Xs, -pp.clip, pp.clip)
+
+    return pl.DataFrame(Xs, schema=cols)
+
+
+
+@dataclass
 class AppConfig:
     seed: int = 42
     output_path: str = "output_hydra.csv"
     model_type: ModelType = ModelType.IFOREST
     model: ModelConfig = field(default_factory=ModelConfig)
     eda_only: bool = False
+
+    preprocess: PreprocessConfig = field(default_factory=PreprocessConfig)
 
     ensemble_models: list[ModelType] = field(
         default_factory=lambda: [
@@ -165,6 +228,11 @@ def hydra_app(cfg: AppConfig) -> None:
     train_X = process_data(train_df)
     test_X = process_data(test_df)
 
+    sk_train_X, sk_test_X = train_X, test_X
+    if cfg.model_type != ModelType.LSTM_AE:
+        sk_train_X, fitted_scaler = _fit_preprocess(train_X, cfg.preprocess)
+        sk_test_X = _apply_preprocess(test_X, cfg.preprocess, fitted_scaler)
+
     # 2. W&B 설정
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
 
@@ -200,13 +268,13 @@ def hydra_app(cfg: AppConfig) -> None:
 
             # 단일 모델 학습
             sub_model = train_model(
-                train_X=train_X,
+                train_X=sk_train_X,
                 model_type=internal_model_type,  # "IsolationForest" 등 # type: ignore
                 **kwargs,
             )
 
             # 단일 모델 추론
-            sub_pred_df = inference(test_X=test_X, model=sub_model)
+            sub_pred_df = inference(test_X=sk_test_X, model=sub_model)
             log.info(
                 f"[ENSEMBLE] Sub model {sub_mt} prediction head:\n"
                 f"{sub_pred_df.head()}"
@@ -291,7 +359,7 @@ def hydra_app(cfg: AppConfig) -> None:
             # 학습
             train_start = time.perf_counter()
             model = train_model(
-                train_X=train_X,
+                train_X=sk_train_X,
                 model_type=internal_model_type,  # type: ignore
                 **kwargs,
             )
@@ -302,7 +370,7 @@ def hydra_app(cfg: AppConfig) -> None:
 
             # 추론
             infer_start = time.perf_counter()
-            pred_df = inference(test_X=test_X, model=model)
+            pred_df = inference(test_X=sk_test_X, model=model)
             print("[Hydra] Prediction head:")
             print(pred_df.head())
             infer_elapsed = time.perf_counter() - infer_start
