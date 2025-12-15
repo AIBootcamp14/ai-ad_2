@@ -18,8 +18,8 @@ lstm_ae:
   clip_grad_norm: 1.0
 
   device: null
-  threshold_quantile: 0.999
+  threshold_quantile: 0.995
   print_progress: true
 
   run_score_quantile: 0.99
-  run_threshold_quantile: 0.95
+  run_threshold_quantile: 0.995
