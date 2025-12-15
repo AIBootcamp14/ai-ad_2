@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Any
 
 import numpy as np
 import polars as pl
@@ -40,15 +40,20 @@ class LSTMAEArtifacts:
     """
     학습이 끝난 후 추론에 필요한 모든 정보를 묶어둔 구조체.
     - model: 학습된 LSTM AutoEncoder
-    - scaler: train 데이터 기준 StandardScaler
+    - preprocess_scaler: train 데이터 기준 StandardScaler
     - window_size / window_stride: 윈도우 생성시 사용한 파라미터
     - threshold: point-wise reconstruction error 기준 이상치 임계값
+    - run_threshold: run-level threshold
+    - run_score_quantile: run_score를 만들 때 쓰는 q
     """
     model: "LSTMAutoEncoder"
-    scaler: StandardScaler
+    preprocess_scaler: Optional[Any]          # sklearn scaler 또는 내부 scaler, 없으면 None
+    preprocess_clip: Optional[float]          # clip 값
     window_size: int
     window_stride: int
-    threshold: float
+    threshold: float                          # (백업용) point-wise threshold
+    run_threshold: Optional[float] = None     # run-level threshold
+    run_score_quantile: float = 0.99          # run_score를 만들 때 쓰는 q
 
 
 # Dataset / 시퀀스 유틸 함수들
@@ -68,6 +73,27 @@ class SequenceDataset(Dataset):
 
     def __getitem__(self, idx: int) -> torch.Tensor:
         return self.sequences[idx]
+
+
+def _compute_run_scores_quantile(
+    point_scores: np.ndarray,
+    group_ids: np.ndarray,
+    q: float = 0.99,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    group_ids = np.asarray(group_ids)
+    run_ids, inv = np.unique(group_ids, return_inverse=True)
+    counts = np.bincount(inv)
+
+    order = np.argsort(inv)
+    scores_sorted = point_scores[order]
+
+    run_scores = np.empty(len(run_ids), dtype=np.float32)
+    offset = 0
+    for i, c in enumerate(counts):
+        seg = scores_sorted[offset:offset + c]
+        run_scores[i] = float(np.quantile(seg, q)) if seg.size else 0.0
+        offset += c
+    return run_ids, run_scores, inv
 
 
 def _create_sequences(
@@ -245,11 +271,12 @@ class LSTMAutoEncoder(nn.Module):
         self.dec_fc = nn.Linear(latent_dim, hidden_dim)
         self.decoder = nn.LSTM(
             input_size=hidden_dim,
-            hidden_size=input_dim,
+            hidden_size=hidden_dim,
             num_layers=num_layers,
             batch_first=True,
             dropout=dec_dropout,
         )
+        self.out_proj = nn.Linear(hidden_dim, input_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -269,7 +296,8 @@ class LSTMAutoEncoder(nn.Module):
         # (B, 1, H) -> (B, T, H)로 반복
         dec_input = dec_hidden.unsqueeze(1).repeat(1, seq_len, 1)
 
-        out, _ = self.decoder(dec_input)  # (B, T, F)
+        out, _ = self.decoder(dec_input)      # (B, T, H)
+        out = self.out_proj(out)             # (B, T, F)
         return out
 
 
@@ -286,6 +314,10 @@ def train_lstm_autoencoder(
     train_X: pl.DataFrame,
     cfg: Optional[LSTMAEConfig] = None,
     group_ids: Optional[np.ndarray] = None,
+    *,
+    inputs_are_preprocessed: bool = False,
+    preprocess_scaler: Optional[Any] = None,
+    preprocess_clip: Optional[float] = None,
 ) -> LSTMAEArtifacts:
     """
     Polars DataFrame(train_X)을 받아 LSTM AutoEncoder를 학습하고,
@@ -306,8 +338,16 @@ def train_lstm_autoencoder(
         cfg.input_dim = num_features
 
     # 스케일링
-    scaler = StandardScaler.fit(arr)
-    arr_norm = scaler.transform(arr)
+    if inputs_are_preprocessed:
+        arr_norm = arr
+        scaler = preprocess_scaler
+        clip = preprocess_clip
+    else:
+        scaler = preprocess_scaler if preprocess_scaler is not None else StandardScaler.fit(arr)
+        arr_norm = scaler.transform(arr)
+        clip = preprocess_clip
+        if clip is not None:
+            arr_norm = np.clip(arr_norm, -clip, clip)
 
     # 시퀀스 생성 (run별)
     if group_ids is not None:
@@ -419,13 +459,35 @@ def train_lstm_autoencoder(
             f"[LSTM-AE] threshold (quantile={cfg.threshold_quantile}) "
             f"= {threshold:.6f}"
         )
+    run_threshold: Optional[float] = None
+    run_score_q = getattr(cfg, "run_score_quantile", 0.99)
+    run_th_q = getattr(cfg, "run_threshold_quantile", None)
+    if run_th_q is None:
+        run_th_q = cfg.threshold_quantile
+
+    if group_ids is not None:
+        _, run_scores, _ = _compute_run_scores_quantile(point_scores, group_ids, q=float(run_score_q))
+        run_threshold = float(np.quantile(run_scores, float(run_th_q)))
+    if cfg.print_progress:
+        print(
+            f"[LSTM-AE] point_threshold (point_q={cfg.threshold_quantile}) = {threshold:.6f}"
+        )
+        if run_threshold is not None:
+            print(
+                f"[LSTM-AE] run_threshold   (run_score_q={run_score_q}, run_q={run_th_q}) = {run_threshold:.6f}"
+            )
+        else:
+            print("[LSTM-AE] run_threshold   = None (point-level decision)")
 
     artifacts = LSTMAEArtifacts(
         model=model,
-        scaler=scaler,
+        preprocess_scaler=scaler,
+        preprocess_clip=clip,
         window_size=cfg.window_size,
         window_stride=cfg.window_stride,
         threshold=threshold,
+        run_threshold=run_threshold,
+        run_score_quantile=float(run_score_q),
     )
     return artifacts
 
@@ -437,6 +499,8 @@ def inference_lstm_autoencoder(
     artifacts: LSTMAEArtifacts,
     cfg: Optional[LSTMAEConfig] = None,
     group_ids: Optional[np.ndarray] = None,
+    *,
+    inputs_are_preprocessed: bool = False,
 ) -> pl.DataFrame:
     """
     학습된 LSTM-AE artifacts + test_X(Polars DataFrame)를 받아
@@ -451,7 +515,7 @@ def inference_lstm_autoencoder(
         cfg = LSTMAEConfig()
 
     model = artifacts.model
-    scaler = artifacts.scaler
+    scaler = artifacts.preprocess_scaler
     window_size = artifacts.window_size
     window_stride = artifacts.window_stride
     threshold = artifacts.threshold
@@ -463,7 +527,13 @@ def inference_lstm_autoencoder(
     arr = test_X.to_numpy().astype(np.float32)
     num_points, _ = arr.shape
 
-    arr_norm = scaler.transform(arr)
+    if inputs_are_preprocessed or (scaler is None):
+        arr_norm = arr
+    else:
+        arr_norm = scaler.transform(arr)
+
+    if artifacts.preprocess_clip is not None:
+        arr_norm = np.clip(arr_norm, -artifacts.preprocess_clip, artifacts.preprocess_clip)
 
     if group_ids is not None:
         sequences, window_point_indices = _create_sequences_by_group(
@@ -510,8 +580,35 @@ def inference_lstm_autoencoder(
         window_point_indices=window_point_indices,
     )
 
+    use_run = (group_ids is not None) and (getattr(artifacts, "run_threshold", None) is not None)
+
+    if cfg.print_progress:
+        if use_run:
+            print(
+                f"[LSTM-AE][DECISION] mode=RUN  "
+                f"point_threshold={artifacts.threshold:.6f}  "
+                f"run_threshold={artifacts.run_threshold:.6f}  "
+                f"run_score_q={getattr(artifacts, 'run_score_quantile', None)}"
+            )
+        else:
+            print(
+                f"[LSTM-AE][DECISION] mode=POINT "
+                f"point_threshold={artifacts.threshold:.6f}"
+            )
+
     # threshold 기반 이상치 판별
-    labels = (point_scores > threshold).astype(int)
+    point_labels = (point_scores > threshold).astype(int)
+
+    if (group_ids is not None) and (artifacts.run_threshold is not None):
+        _, run_scores, inv = _compute_run_scores_quantile(
+            point_scores=point_scores,
+            group_ids=group_ids,
+            q=float(artifacts.run_score_quantile),
+        )
+        run_labels = (run_scores > float(artifacts.run_threshold)).astype(int)
+        labels = run_labels[inv]   # broadcast
+    else:
+        labels = point_labels
 
     pred_df = pl.DataFrame({"faultNumber": labels})
     return pred_df

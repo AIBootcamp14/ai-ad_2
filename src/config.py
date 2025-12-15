@@ -1,5 +1,6 @@
 from pathlib import Path
 from dataclasses import dataclass
+from typing import Optional
 
 # 공통 설정 값들
 RANDOM_SEED: int = 42
@@ -32,7 +33,7 @@ class IsolationForestConfig:
     max_features: float = 1.0                 # feature 비율
     bootstrap: bool = False
     n_jobs: int | None = -1
-    random_state: int | None = None
+    random_state: int | None = RANDOM_SEED
     verbose: int = 0
     warm_start: bool = False
 
@@ -47,7 +48,7 @@ class SGDOneClassSVMConfig:
     max_iter: int = 1000
     tol: float = 1e-3
     shuffle: bool = True
-    random_state: int | None = None
+    random_state: int | None = RANDOM_SEED
     verbose: int = 0
     # 필요하면 loss, penalty, alpha 등도 추가 가능
 
@@ -65,7 +66,7 @@ class LOFConfig:
 class EllipticEnvelopeConfig:
     contamination: float = 0.1
     support_fraction: float | None = None
-    random_state: int | None = None
+    random_state: int | None = RANDOM_SEED
 
 # LSTM AutoEncoder용 Config (딥러닝용)
 @dataclass
@@ -100,6 +101,8 @@ class LSTMAEConfig:
     # epoch별 로그 출력 여부
     print_progress: bool = True
 
+    run_threshold_quantile: Optional[float] = None
+    run_score_quantile: float | None = None
 
 # 기본값
 DEFAULT_IFOREST_CONFIG = IsolationForestConfig()

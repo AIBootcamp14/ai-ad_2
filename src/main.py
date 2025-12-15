@@ -234,6 +234,71 @@ def _get_internal_model_and_kwargs(
         raise ValueError(f"Unsupported single ModelType for internal mapping: {mt}")
 
 
+def wandb_log_pred_stats(
+    labels: np.ndarray,
+    group_ids: Optional[np.ndarray] = None,
+    prefix: str = "pred",
+    topk: int = 20,
+) -> None:
+    """W&B에 예측 통계(전체 이상치 비율 + run별 이상치 비율 분포)를 로깅."""
+    if wandb.run is None:
+        return
+
+    labels = np.asarray(labels).astype(np.int64)
+    n_total = int(labels.size)
+    n_anom = int(labels.sum())
+    anom_ratio = float(n_anom / max(n_total, 1))
+
+    wandb.log({
+        f"{prefix}/num_total": n_total,
+        f"{prefix}/num_anomaly": n_anom,
+        f"{prefix}/anomaly_ratio": anom_ratio,
+    })
+
+    if group_ids is None:
+        return
+
+    group_ids = np.asarray(group_ids)
+    if group_ids.shape[0] != labels.shape[0]:
+        # 길이 불일치 방어
+        wandb.log({f"{prefix}/warn_group_mismatch": 1})
+        return
+
+    # run별 ratio 계산 (np.unique + bincount로 빠르게)
+    uniq, inv = np.unique(group_ids, return_inverse=True)
+    counts = np.bincount(inv)
+    sums = np.bincount(inv, weights=labels)
+    ratios = sums / np.maximum(counts, 1)
+
+    # 분포 요약 통계
+    p = np.percentile(ratios, [0, 25, 50, 75, 90, 95, 99, 100])
+    wandb.log({
+        f"{prefix}/runs": int(uniq.size),
+        f"{prefix}/run_ratio_mean": float(ratios.mean()),
+        f"{prefix}/run_ratio_std": float(ratios.std()),
+        f"{prefix}/run_ratio_p0": float(p[0]),
+        f"{prefix}/run_ratio_p25": float(p[1]),
+        f"{prefix}/run_ratio_p50": float(p[2]),
+        f"{prefix}/run_ratio_p75": float(p[3]),
+        f"{prefix}/run_ratio_p90": float(p[4]),
+        f"{prefix}/run_ratio_p95": float(p[5]),
+        f"{prefix}/run_ratio_p99": float(p[6]),
+        f"{prefix}/run_ratio_p100": float(p[7]),
+        f"{prefix}/runs_with_any_anomaly": int((sums > 0).sum()),
+        f"{prefix}/runs_with_any_anomaly_ratio": float((sums > 0).mean()),
+    })
+
+    # 히스토그램(= run별 이상치 비율 분포)
+    wandb.log({f"{prefix}/run_ratio_hist": wandb.Histogram(ratios)}) # type: ignore
+
+    # 상위 topk run 테이블(원하면 UI에서 bar chart로 바로 뽑기 좋음)
+    top_idx = np.argsort(-ratios)[:topk]
+    table = wandb.Table(columns=["simulationRun", "anomaly_ratio", "n_points", "n_anomaly"])
+    for i in top_idx:
+        table.add_data(int(uniq[i]), float(ratios[i]), int(counts[i]), int(sums[i]))
+    wandb.log({f"{prefix}/run_ratio_top": table})
+
+
 @hydra.main(version_base=None, config_name="config", config_path="conf")
 def hydra_app(cfg: AppConfig) -> None:
     """
@@ -276,8 +341,10 @@ def hydra_app(cfg: AppConfig) -> None:
         # 1. 데이터 로드 & 전처리
         with log_time(log, "data/load_train_data"):
             train_df = load_train_data()
+            train_group = train_df["simulationRun"].to_numpy()
         with log_time(log, "data/load_test_data"):
             test_df = load_test_data()
+            test_group = test_df["simulationRun"].to_numpy()
         log.info("train_df shape=%s, test_df shape=%s", train_df.shape, test_df.shape)
 
         with log_time(log, "data/process_data(train)"):
@@ -286,12 +353,13 @@ def hydra_app(cfg: AppConfig) -> None:
             test_X = process_data(test_df)
         log.info("train_X shape=%s, test_X shape=%s", train_X.shape, test_X.shape)
 
-        sk_train_X, sk_test_X = train_X, test_X
-        if cfg.model_type != ModelType.LSTM_AE:
-            with log_time(log, "preprocess/fit_scaler"):
-                sk_train_X, fitted_scaler = _fit_preprocess(train_X, cfg.preprocess)
-            with log_time(log, "preprocess/apply_scaler"):
-                sk_test_X = _apply_preprocess(test_X, cfg.preprocess, fitted_scaler)
+        with log_time(log, "preprocess/fit_scaler"):
+            train_X_pp, fitted_scaler = _fit_preprocess(train_X, cfg.preprocess)
+        with log_time(log, "preprocess/apply_scaler"):
+            test_X_pp = _apply_preprocess(test_X, cfg.preprocess, fitted_scaler)
+
+        # 모든 모델(LSTM_AE 포함)에서 동일한 전처리 결과를 사용
+        sk_train_X, sk_test_X = train_X_pp, test_X_pp
 
         # 2. W&B 설정
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
@@ -358,6 +426,8 @@ def hydra_app(cfg: AppConfig) -> None:
 
                 pred_df = pl.DataFrame({"faultNumber": final_labels})
                 log.info("[ENSEMBLE] Prediction head:\n%s", pred_df.head())
+                if wandb.run is not None:
+                    wandb_log_pred_stats(final_labels, test_group, prefix="pred/ENSEMBLE")
 
             infer_elapsed = time.perf_counter() - infer_start
             log.info("[ENSEMBLE][INFER] elapsed: %.3f seconds", infer_elapsed)
@@ -381,12 +451,25 @@ def hydra_app(cfg: AppConfig) -> None:
                 train_start = time.perf_counter()
                 with log_time(log, "lstm_ae/train_lstm_autoencoder"):
                     artifacts = train_lstm_autoencoder(
-                        train_X=train_X,
+                        train_X=sk_train_X,
+                        inputs_are_preprocessed=True,
+                        preprocess_scaler=fitted_scaler,
+                        preprocess_clip=cfg.preprocess.clip,
                         cfg=lstm_cfg,
                         group_ids=train_group,
                     )
                 train_elapsed = time.perf_counter() - train_start
                 log.info("[LSTM_AE][TRAIN] elapsed: %.3f seconds", train_elapsed)
+                pt = getattr(artifacts, "threshold", None)
+                rt = getattr(artifacts, "run_threshold", None)
+                rsq = getattr(artifacts, "run_score_quantile", None)
+                run_q = getattr(lstm_cfg, "run_threshold_quantile", None) or lstm_cfg.threshold_quantile
+
+                log.info("[LSTM_AE][THRESH] point_threshold(point_q=%.4f)=%.6f", lstm_cfg.threshold_quantile, pt)
+                if rt is not None:
+                    log.info("[LSTM_AE][THRESH] run_threshold(run_score_q=%s, run_q=%.4f)=%.6f", str(rsq), run_q, rt)
+                else:
+                    log.info("[LSTM_AE][THRESH] run_threshold=None (point-level decision)")
                 if wandb.run is not None:
                     wandb.log({"time/train_elapsed_sec": train_elapsed})
 
@@ -394,13 +477,18 @@ def hydra_app(cfg: AppConfig) -> None:
                 infer_start = time.perf_counter()
                 with log_time(log, "lstm_ae/inference_lstm_autoencoder"):
                     pred_df = inference_lstm_autoencoder(
-                        test_X=test_X,
+                        test_X=sk_test_X,
+                        inputs_are_preprocessed=True,
                         artifacts=artifacts,
                         cfg=lstm_cfg,
                         group_ids=test_group,
                     )
                 log.info("[SINGLE][LSTM_AE] Inference done")
                 log.info("[LSTM_AE] Prediction head:\n%s", pred_df.head())
+                if wandb.run is not None:
+                    labels = pred_df["faultNumber"].to_numpy()
+                    wandb_log_pred_stats(labels, test_group, prefix="pred/LSTM_AE")
+
                 infer_elapsed = time.perf_counter() - infer_start
                 log.info("[LSTM_AE][INFER] elapsed: %.3f seconds", infer_elapsed)
                 if wandb.run is not None:
@@ -425,6 +513,10 @@ def hydra_app(cfg: AppConfig) -> None:
                 with log_time(log, f"sklearn/infer/{mt}"):
                     pred_df = inference(test_X=sk_test_X, model=model)
                 log.info("[SINGLE] Prediction head:\n%s", pred_df.head())
+                if wandb.run is not None:
+                    labels = pred_df["faultNumber"].to_numpy()
+                    wandb_log_pred_stats(labels, test_group, prefix=f"pred/{mt}")
+
                 infer_elapsed = time.perf_counter() - infer_start
                 log.info("[INFER] elapsed: %.3f seconds", infer_elapsed)
                 if wandb.run is not None:

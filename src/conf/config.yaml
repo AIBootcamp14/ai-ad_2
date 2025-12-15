@@ -2,7 +2,7 @@
 
 defaults:
   - app_schema
-  - model: iforest
+  - model: lstm_ae
   - _self_
 
 # 공통 설정
@@ -14,7 +14,7 @@ output_path: "output_${model_type}.csv"
 # 스케일러 설정
 preprocess:
   enabled: true
-  scaler: "standard"      # "standard" | "robust" | "none"
+  scaler: "robust"      # "standard" | "robust" | "none"
   with_centering: true
   with_scaling: true
   quantile_range: [25.0, 75.0]
@@ -47,11 +47,7 @@ wandb_entity: null
 
 wandb_run_name: "${now:%Y%m%d_%H%M%S}_${model_type}_kmc"
 
-wandb_tags:
-  # - "ensemble"
-  # - "iforest"
-  # - "lof"
-  - "ee"
+wandb_tags: ["${model_type}"]
 
 hydra:
   job:
